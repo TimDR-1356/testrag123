@@ -33,7 +33,8 @@ llm = ChatLlamaCpp(
     model_path=AVAILABLE_MODELS[selected_model_key],
     temperature=0.7,
     top_p=0.9,
-    n_ctx=2048,
+    n_ctx=4000,
+    max_tokens=2000,
     streaming=True,
     verbose=False
 )
@@ -62,7 +63,8 @@ async def main(message: cl.Message):
                 model_path=AVAILABLE_MODELS[selected_model_key],
                 temperature=0.7,
                 top_p=0.9,
-                n_ctx=2048,
+                n_ctx=4000,
+                max_tokens=2000,
                 streaming=True,
                 verbose=False
             )
@@ -98,7 +100,7 @@ async def main(message: cl.Message):
             history_text += f"Context: {ctx_text}\n"
 
     prompt = (
-        # f"{SYSTEM_PROMPT_BASE}\n\n"
+        f"{SYSTEM_PROMPT_BASE}\n\n"
         f"{history_text}\n"
         f"Antwoord in dezelfde taal als de gebruiker ({detected_lang}).\n"
         f"Vraag: {user_text}"
