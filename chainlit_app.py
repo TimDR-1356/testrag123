@@ -1,4 +1,5 @@
 import chainlit as cl
+import asyncio
 from langchain_community.chat_models import ChatLlamaCpp
 from langdetect import detect
 
@@ -39,12 +40,46 @@ llm = ChatLlamaCpp(
     verbose=False
 )
 
-# --- Chainlit events ---
+
+# === Geanimeerde "nadenk" indicator ===
+async def start_thinking_animation(msg: cl.Message, base_msg: str):
+    """Toont een draaiende animatie in hetzelfde bericht."""
+    frames = ["🌑", "🌒", "🌓", "🌔", "🌕", "🌖", "🌗", "🌘"]
+    progress = 0
+    try:
+        while True:
+            current_frame = frames[progress % len(frames)]
+            msg.content = f"{current_frame} {base_msg}"
+            await msg.update()
+            progress += 1
+            await asyncio.sleep(0.5)
+    except asyncio.CancelledError:
+        msg.content = ""  # verwijder animatie
+        await msg.update()
+        raise
+
+
+async def start_delayed_animation(msg: cl.Message, base_msg: str, delay: float):
+    """Wacht x seconden en start dan de animatie, tenzij geannuleerd."""
+    try:
+        await asyncio.sleep(delay)
+        await start_thinking_animation(msg, base_msg)
+    except asyncio.CancelledError:
+        # animatie werd nooit gestart of gestopt voor de delay klaar was
+        pass
+
+
+# === Chainlit event handlers ===
 @cl.on_chat_start
 async def start():
-    model_list = "\n".join([f"- {key}" + (" (actief)" if key == selected_model_key else "") for key in AVAILABLE_MODELS])
-    await cl.Message(content=f"Beschikbare modellen:\n{model_list}\n\nJe kunt van model wisselen door een bericht te beginnen met #model_naam").send()
+    model_list = "\n".join(
+        [f"- {key}" + (" (actief)" if key == selected_model_key else "") for key in AVAILABLE_MODELS]
+    )
+    await cl.Message(
+        content=f"Beschikbare modellen:\n{model_list}\n\nJe kunt van model wisselen door een bericht te beginnen met #model_naam"
+    ).send()
     await cl.Message(content="Hallo, stel een vraag!").send()
+
 
 @cl.on_message
 async def main(message: cl.Message):
@@ -53,7 +88,7 @@ async def main(message: cl.Message):
     user_text = message.content.strip()
     print("User message:", user_text)
 
-    # --- Model switch ---
+    # --- Model wisselen ---
     if user_text.startswith("#"):
         parts = user_text.split(maxsplit=1)
         model_mention = parts[0][1:]
@@ -79,10 +114,10 @@ async def main(message: cl.Message):
     except:
         detected_lang = "en"
 
-    # --- Vector search ---
+    # --- Context ophalen ---
     context_passages = vector_search(user_text, lang=detected_lang)
 
-    # --- Voeg user message toe aan geschiedenis ---
+    # --- Chatgeschiedenis bijwerken ---
     chat_history.append({
         "role": "user",
         "content": user_text,
@@ -90,8 +125,8 @@ async def main(message: cl.Message):
         "context": context_passages
     })
 
-    # --- Maak system prompt met recente context ---
-    recent_history = chat_history[-4:]  # laatste 2 vragen/antwoorden
+    # --- Bouw prompt ---
+    recent_history = chat_history[-4:]
     history_text = ""
     for msg in recent_history:
         ctx_text = "\n".join(msg.get("context", []))
@@ -106,19 +141,28 @@ async def main(message: cl.Message):
         f"Vraag: {user_text}"
     )
 
+    # --- Maak bericht en start vertraagde animatie ---
+    msg = await cl.Message(content="", author=selected_model_key).send()
+    thinking_task = asyncio.create_task(start_delayed_animation(msg, "Even geduld, het model denkt na...", 5))
+
+    # --- LLM generatie asynchroon uitvoeren ---
     def generate_response(prompt):
         full_text = ""
         for chunk in llm.stream(prompt):
             full_text += chunk.content
         return full_text
 
-    # --- Streaming bericht ---
-    msg = await cl.Message(content="", author=selected_model_key).send()
+    try:
+        ai_response = await cl.make_async(generate_response)(prompt)
+    finally:
+        # stop animatie zodra model klaar is
+        thinking_task.cancel()
+        try:
+            await thinking_task
+        except asyncio.CancelledError:
+            pass
 
-    # Run sync functie async in aparte thread
-    ai_response = await cl.make_async(generate_response)(prompt)
-
-    # Stuur response token per token naar frontend
+    # --- Stream het uiteindelijke antwoord token voor token ---
     for token in ai_response:
         await msg.stream_token(token)
 
@@ -131,6 +175,147 @@ async def main(message: cl.Message):
     })
 
     await msg.update()
+
+
+
+
+
+# import chainlit as cl
+# from langchain_community.chat_models import ChatLlamaCpp
+# from langdetect import detect
+#
+# # --- Mock vector search functie ---
+# def vector_search(query, lang="en"):
+#     if "Python" in query:
+#         return ["Python is een programmeertaal...", "Je kunt functies definiëren met def ..."]
+#     else:
+#         return ["Geen specifieke info gevonden, default info in het Engels."]
+#
+# # --- Beschikbare modellen ---
+# AVAILABLE_MODELS = {
+#     "gemma": "models/gemma-3-4b-it-IQ4_NL.gguf",
+#     "mistral": "models/mistral-7b-instruct-v0.1.Q2_K.gguf",
+#     "qwen": "models/Qwen2.5-VL-7B-Instruct-Q2_K_L.gguf",
+# }
+#
+# # --- Basis system prompt ---
+# SYSTEM_PROMPT_BASE = (
+#     "Je bent een behulpzame AI-assistent. Gebruik de context van de documenten "
+#     "en de chatgeschiedenis om de vraag van de gebruiker te beantwoorden."
+# )
+#
+# # --- Chatgeschiedenis ---
+# chat_history = []
+#
+# # --- Standaard model ---
+# selected_model_key = list(AVAILABLE_MODELS.keys())[0]
+#
+# # --- Maak globale LLM instance ---
+# llm = ChatLlamaCpp(
+#     model_path=AVAILABLE_MODELS[selected_model_key],
+#     temperature=0.7,
+#     top_p=0.9,
+#     n_ctx=4000,
+#     max_tokens=2000,
+#     streaming=True,
+#     verbose=False
+# )
+#
+# # --- Chainlit events ---
+# @cl.on_chat_start
+# async def start():
+#     model_list = "\n".join([f"- {key}" + (" (actief)" if key == selected_model_key else "") for key in AVAILABLE_MODELS])
+#     await cl.Message(content=f"Beschikbare modellen:\n{model_list}\n\nJe kunt van model wisselen door een bericht te beginnen met #model_naam").send()
+#     await cl.Message(content="Hallo, stel een vraag!").send()
+#
+# @cl.on_message
+# async def main(message: cl.Message):
+#     global selected_model_key, llm
+#
+#     user_text = message.content.strip()
+#     print("User message:", user_text)
+#
+#     # --- Model switch ---
+#     if user_text.startswith("#"):
+#         parts = user_text.split(maxsplit=1)
+#         model_mention = parts[0][1:]
+#         if model_mention in AVAILABLE_MODELS:
+#             selected_model_key = model_mention
+#             llm = ChatLlamaCpp(
+#                 model_path=AVAILABLE_MODELS[selected_model_key],
+#                 temperature=0.7,
+#                 top_p=0.9,
+#                 n_ctx=4000,
+#                 max_tokens=2000,
+#                 streaming=True,
+#                 verbose=False
+#             )
+#             user_text = parts[1] if len(parts) > 1 else ""
+#             await cl.Message(content=f"Model ingesteld op: {selected_model_key}").send()
+#             if not user_text:
+#                 return
+#
+#     # --- Detecteer taal ---
+#     try:
+#         detected_lang = detect(user_text)
+#     except:
+#         detected_lang = "en"
+#
+#     # --- Vector search ---
+#     context_passages = vector_search(user_text, lang=detected_lang)
+#
+#     # --- Voeg user message toe aan geschiedenis ---
+#     chat_history.append({
+#         "role": "user",
+#         "content": user_text,
+#         "lang": detected_lang,
+#         "context": context_passages
+#     })
+#
+#     # --- Maak system prompt met recente context ---
+#     recent_history = chat_history[-4:]  # laatste 2 vragen/antwoorden
+#     history_text = ""
+#     for msg in recent_history:
+#         ctx_text = "\n".join(msg.get("context", []))
+#         history_text += f"{msg['role'].capitalize()}: {msg['content']}\n"
+#         if ctx_text:
+#             history_text += f"Context: {ctx_text}\n"
+#
+#     prompt = (
+#         f"{SYSTEM_PROMPT_BASE}\n\n"
+#         f"{history_text}\n"
+#         f"Antwoord in dezelfde taal als de gebruiker ({detected_lang}).\n"
+#         f"Vraag: {user_text}"
+#     )
+#
+#     def generate_response(prompt):
+#         full_text = ""
+#         for chunk in llm.stream(prompt):
+#             full_text += chunk.content
+#         return full_text
+#
+#     # --- Streaming bericht ---
+#     msg = await cl.Message(content="", author=selected_model_key).send()
+#
+#     # Run sync functie async in aparte thread
+#     ai_response = await cl.make_async(generate_response)(prompt)
+#
+#     # Stuur response token per token naar frontend
+#     for token in ai_response:
+#         await msg.stream_token(token)
+#
+#     # --- Voeg AI antwoord toe aan geschiedenis ---
+#     chat_history.append({
+#         "role": "ai",
+#         "content": ai_response,
+#         "lang": detected_lang,
+#         "context": context_passages
+#     })
+#
+#     await msg.update()
+
+
+
 
     # # --- Streaming bericht ---
     # msg = await cl.Message(content="", author="Assistant").send()
