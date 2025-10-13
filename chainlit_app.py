@@ -43,7 +43,7 @@ llm = ChatLlamaCpp(
 @cl.on_chat_start
 async def start():
     model_list = "\n".join([f"- {key}" + (" (actief)" if key == selected_model_key else "") for key in AVAILABLE_MODELS])
-    await cl.Message(content=f"Beschikbare modellen:\n{model_list}\n\nJe kunt van model wisselen door een bericht te beginnen met @model_naam").send()
+    await cl.Message(content=f"Beschikbare modellen:\n{model_list}\n\nJe kunt van model wisselen door een bericht te beginnen met #model_naam").send()
     await cl.Message(content="Hallo, stel een vraag!").send()
 
 @cl.on_message
@@ -54,7 +54,7 @@ async def main(message: cl.Message):
     print("User message:", user_text)
 
     # --- Model switch ---
-    if user_text.startswith("@"):
+    if user_text.startswith("#"):
         parts = user_text.split(maxsplit=1)
         model_mention = parts[0][1:]
         if model_mention in AVAILABLE_MODELS:
@@ -106,20 +106,46 @@ async def main(message: cl.Message):
         f"Vraag: {user_text}"
     )
 
+    def generate_response(prompt):
+        full_text = ""
+        for chunk in llm.stream(prompt):
+            full_text += chunk.content
+        return full_text
+
     # --- Streaming bericht ---
-    msg = await cl.Message(content="", author="Assistant").send()
-    for chunk in llm.stream(prompt):
-        await msg.stream_token(chunk.content)
+    msg = await cl.Message(content="", author=selected_model_key).send()
+
+    # Run sync functie async in aparte thread
+    ai_response = await cl.make_async(generate_response)(prompt)
+
+    # Stuur response token per token naar frontend
+    for token in ai_response:
+        await msg.stream_token(token)
 
     # --- Voeg AI antwoord toe aan geschiedenis ---
     chat_history.append({
         "role": "ai",
-        "content": msg.content,
+        "content": ai_response,
         "lang": detected_lang,
         "context": context_passages
     })
 
     await msg.update()
+
+    # # --- Streaming bericht ---
+    # msg = await cl.Message(content="", author="Assistant").send()
+    # for chunk in llm.stream(prompt):
+    #     await msg.stream_token(chunk.content)
+    #
+    # # --- Voeg AI antwoord toe aan geschiedenis ---
+    # chat_history.append({
+    #     "role": "ai",
+    #     "content": msg.content,
+    #     "lang": detected_lang,
+    #     "context": context_passages
+    # })
+    #
+    # await msg.update()
 
 
 #
