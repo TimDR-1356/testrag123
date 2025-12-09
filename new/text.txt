@@ -1,2 +1,17 @@
+Openwebui external tools:
 https://github.com/open-webui/openapi-servers
 https://docs.openwebui.com/features/plugin/tools/openapi-servers/open-webui
+
+
+New ollama model instructions:
+myllm/
+ ├── Modelfile
+ └── model.gguf
+
+Inside Modelfile:
+FROM ./model.gguf
+
+
+Run
+ollama create myllm -f Modelfile
+ollama run myllm
