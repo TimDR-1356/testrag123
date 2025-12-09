@@ -1,0 +1,2 @@
+https://github.com/open-webui/openapi-servers
+https://docs.openwebui.com/features/plugin/tools/openapi-servers/open-webui
